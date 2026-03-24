@@ -2,15 +2,18 @@
 """
 serial2ws — virtual serial port ↔ WebSocket bridge
 
-Creates /dev/tty.<name> and /dev/cu.<name>, then bridges them
-bidirectionally to a WebSocket server.  Requires root on macOS
-to create the /dev/ symlinks.
+Creates a named symlink in /tmp/ pointing to the pty slave device,
+then bridges it bidirectionally to a WebSocket server.
+
+Note: macOS devfs makes /dev/ read-only even for root, so named
+symlinks live in /tmp/.  The underlying device is in /dev/ as
+/dev/ttys### and is a fully functional tty.
 
 Usage:
-  sudo serial2ws                      # auto name, auto port
-  sudo serial2ws -s mydevice          # /dev/tty.mydevice + /dev/cu.mydevice
-  sudo serial2ws -p 9000              # WebSocket on port 9000
-  sudo serial2ws -s mydevice -p 9000
+  python serial2ws.py                      # auto name, default port 8765
+  python serial2ws.py -s mydevice          # /tmp/tty.mydevice
+  python serial2ws.py -p 9000              # WebSocket on port 9000
+  python serial2ws.py -s mydevice -p 9000
 """
 
 import argparse
@@ -35,50 +38,34 @@ DEFAULT_PORT = 8765
 
 class Bridge:
     def __init__(self, name: str, port: int):
-        self.name = name
-        self.port = port
-        self.master_fd = None
-        self.slave_fd  = None
-        self.tty_path  = None
-        self.cu_path   = None
+        self.name       = name
+        self.port       = port
+        self.master_fd  = None
+        self.slave_fd   = None
+        self.slave_path = None   # actual /dev/ttys### device
+        self.link_path  = None   # /tmp/tty.{name} convenience symlink
         self.clients: set = set()
 
-    # -- setup / teardown ---------------------------------------------------
-
     def setup(self):
-        """Open pty and create /dev/ symlinks. Raises PermissionError if not root."""
         self.master_fd, self.slave_fd = pty.openpty()
-        slave = os.ttyname(self.slave_fd)
+        self.slave_path = os.ttyname(self.slave_fd)
 
         # Non-blocking master so loop.add_reader never stalls
         flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
         fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-        self.tty_path = Path(f"/dev/tty.{self.name}")
-        self.cu_path  = Path(f"/dev/cu.{self.name}")
-
-        try:
-            for p in (self.tty_path, self.cu_path):
-                if p.is_symlink() or p.exists():
-                    p.unlink()
-                p.symlink_to(slave)
-        except PermissionError:
-            self._close_fds()
-            raise PermissionError(
-                "Creating /dev/tty.* requires root.\n"
-                f"  Run:  sudo {' '.join(sys.argv)}"
-            )
+        # Named symlink in /tmp/ (writable without root)
+        self.link_path = Path(f"/tmp/tty.{self.name}")
+        if self.link_path.is_symlink() or self.link_path.exists():
+            self.link_path.unlink()
+        self.link_path.symlink_to(self.slave_path)
 
     def teardown(self):
-        for p in (self.tty_path, self.cu_path):
-            if p and p.is_symlink():
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-        self._close_fds()
-
-    def _close_fds(self):
+        if self.link_path and self.link_path.is_symlink():
+            try:
+                self.link_path.unlink()
+            except OSError:
+                pass
         for fd in (self.slave_fd, self.master_fd):
             if fd is not None:
                 try:
@@ -153,11 +140,11 @@ class Bridge:
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def available_name(base: str) -> str:
-    """Return base if /dev/tty.base doesn't exist, else base0, base1, …"""
-    if not Path(f"/dev/tty.{base}").exists():
+    """Return base if /tmp/tty.base doesn't exist, else base0, base1, …"""
+    if not Path(f"/tmp/tty.{base}").exists():
         return base
     i = 0
-    while Path(f"/dev/tty.{base}{i}").exists():
+    while Path(f"/tmp/tty.{base}{i}").exists():
         i += 1
     return f"{base}{i}"
 
@@ -167,13 +154,13 @@ def available_name(base: str) -> str:
 def main():
     parser = argparse.ArgumentParser(
         prog="serial2ws",
-        description="Virtual serial port ↔ WebSocket bridge  (requires root)",
+        description="Virtual serial port ↔ WebSocket bridge",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Example:  sudo serial2ws -s mydevice -p 9000",
+        epilog="Example:  python serial2ws.py -s mydevice -p 9000",
     )
     parser.add_argument(
         "-s", "--serial", metavar="NAME", default=None,
-        help=f"serial port name → /dev/tty.NAME  (default: {DEFAULT_NAME})",
+        help=f"serial port name  (default: {DEFAULT_NAME})",
     )
     parser.add_argument(
         "-p", "--port", type=int, default=DEFAULT_PORT,
@@ -181,16 +168,11 @@ def main():
     )
     args = parser.parse_args()
 
-    name   = available_name(args.serial if args.serial else DEFAULT_NAME)
+    name   = available_name(args.serial or DEFAULT_NAME)
     bridge = Bridge(name, args.port)
+    bridge.setup()
 
-    try:
-        bridge.setup()
-    except PermissionError as e:
-        sys.exit(f"Error: {e}")
-
-    print(f"\n  serial port  /dev/tty.{name}")
-    print(f"               /dev/cu.{name}")
+    print(f"\n  serial port  /tmp/tty.{name}  →  {bridge.slave_path}")
     print(f"  websocket    ws://localhost:{args.port}")
     print(f"\n  ^C to stop\n")
 

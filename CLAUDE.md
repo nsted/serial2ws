@@ -11,13 +11,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 pip install -r requirements.txt
 
-sudo python serial2ws.py                      # auto name + auto port
-sudo python serial2ws.py -s mydevice          # /dev/tty.mydevice + /dev/cu.mydevice
-sudo python serial2ws.py -p 9000              # WebSocket on port 9000
-sudo python serial2ws.py -s mydevice -p 9000
+python serial2ws.py                      # auto name, port 8765
+python serial2ws.py -s mydevice          # named /tmp/tty.mydevice
+python serial2ws.py -p 9000              # WebSocket on port 9000
+python serial2ws.py -s mydevice -p 9000
 ```
 
-Requires `sudo` — creating `/dev/tty.*` symlinks requires root on macOS.
+No root required.
 
 ## Architecture
 
@@ -40,13 +40,13 @@ Bridge.teardown()
 
 ## Key Technical Decisions
 
-- **`/dev/tty.*` naming**: Arduino IDE and most macOS serial tools enumerate by globbing `/dev/tty.*`. The raw pty slave (`/dev/ttys###`) doesn't match. Symlinks to `/dev/tty.name` and `/dev/cu.name` are required.
+- **`/dev/` is read-only on macOS**: macOS `devfs` blocks all writes to `/dev/` — even root cannot create symlinks there. Named symlinks live in `/tmp/tty.{name}` instead. The underlying pty slave is already in `/dev/` as `/dev/ttys###` and is shown alongside the symlink path on startup.
 - **No `tty.setraw()` on slave**: We don't configure termios — the connecting app sets its own baud rate, parity, etc.
 - **Master always drained**: `_drain_pty` runs regardless of WebSocket connections. Without this, pty write buffers fill and the external app's writes block.
 - **Auto-naming**: If `-s` is omitted, defaults to `serial2ws`; increments suffix (`serial2ws0`, `serial2ws1`, …) if already in use.
 
 ## Platform Notes
 
-- Requires `sudo` — `/dev/` symlink creation needs root. A clear error with the exact retry command is shown if not root.
-- On Linux the slave appears as `/dev/pts/N`; symlinks also require root.
+- No root required. Named symlinks go to `/tmp/` which is world-writable.
+- On Linux the slave appears as `/dev/pts/N`. Behavior is identical.
 - Windows not supported (`pty` is Unix-only).
