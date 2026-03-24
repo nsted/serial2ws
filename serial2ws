@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# serial2ws — virtual serial port ↔ WebSocket bridge
+#
+# Dependencies (install once):
+#   brew install socat websocat
+#
+# Usage:
+#   serial2ws                        auto name, port 8765
+#   serial2ws -s mydevice            /tmp/tty.mydevice → /dev/ttysN
+#   serial2ws -p 9000                WebSocket on port 9000
+#   serial2ws -s mydevice -p 9000
+#
+set -euo pipefail
+
+NAME="serial2ws"
+PORT=8765
+
+usage() {
+    echo "Usage: serial2ws [-s NAME] [-p PORT]"
+    echo "  -s NAME   serial port label  (default: serial2ws)"
+    echo "  -p PORT   WebSocket port     (default: 8765)"
+    exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -s|--serial) NAME="$2"; shift 2 ;;
+        -p|--port)   PORT="$2"; shift 2 ;;
+        -h|--help)   usage ;;
+        *) echo "Unknown option: $1"; usage ;;
+    esac
+done
+
+# ── check dependencies ────────────────────────────────────────────────────────
+
+missing=()
+command -v socat    &>/dev/null || missing+=(socat)
+command -v websocat &>/dev/null || missing+=(websocat)
+if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Missing dependencies — install with:"
+    echo "  brew install ${missing[*]}"
+    exit 1
+fi
+
+# ── auto-increment name if symlink already exists ─────────────────────────────
+
+LINK="/tmp/tty.$NAME"
+if [[ -e "$LINK" || -L "$LINK" ]]; then
+    i=0
+    while [[ -e "/tmp/tty.${NAME}${i}" || -L "/tmp/tty.${NAME}${i}" ]]; do
+        ((i++))
+    done
+    NAME="${NAME}${i}"
+    LINK="/tmp/tty.$NAME"
+fi
+
+# Internal TCP relay between socat (PTY) and websocat (WS)
+# Uses PORT+1 so it doesn't conflict; stays on loopback only.
+RELAY=$((PORT + 1))
+
+# ── cleanup ───────────────────────────────────────────────────────────────────
+
+SOCAT_PID=""
+cleanup() {
+    [[ -n "$SOCAT_PID" ]] && kill "$SOCAT_PID" 2>/dev/null || true
+    rm -f "$LINK"
+    printf '\nStopped.\n'
+}
+trap cleanup EXIT INT TERM
+
+# ── start socat: PTY ↔ TCP relay ──────────────────────────────────────────────
+
+socat "pty,link=$LINK,raw,echo=0" "tcp-l:$RELAY,reuseaddr,fork" &
+SOCAT_PID=$!
+
+# Wait for the symlink to appear (socat creates it async)
+for i in $(seq 20); do
+    [[ -L "$LINK" ]] && break
+    sleep 0.05
+done
+
+if [[ ! -L "$LINK" ]]; then
+    echo "Error: socat failed to create PTY"
+    exit 1
+fi
+
+DEVICE=$(readlink "$LINK")
+
+printf '\n'
+printf '  serial port  %s\n' "$DEVICE"
+printf '  symlink      %s\n' "$LINK"
+printf '  websocket    ws://localhost:%d\n' "$PORT"
+printf '\n  ^C to stop\n\n'
+
+# ── start websocat: WebSocket ↔ TCP relay ─────────────────────────────────────
+# -E = stay alive across disconnects (loop mode)
+
+exec websocat --binary -E "ws-l:127.0.0.1:$PORT" "tcp:127.0.0.1:$RELAY"
