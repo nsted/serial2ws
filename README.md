@@ -22,7 +22,8 @@ A shell script that creates a virtual serial port and bridges it bidirectionally
 
 **macOS (Homebrew) — recommended:**
 ```bash
-brew install nsted/serial2ws/serial2ws
+brew tap nsted/serial2ws
+brew install serial2ws
 ```
 This installs `socat`, `websocat`, and `serial2ws` in one step.
 
