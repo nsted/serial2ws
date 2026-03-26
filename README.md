@@ -18,23 +18,26 @@ A shell script that creates a virtual serial port and bridges it bidirectionally
 - Let legacy serial software talk to a modern WebSocket-based service
 - Pipe serial data to/from a remote WebSocket endpoint via a local virtual port
 
-## Requirements
-
-- macOS or Linux
-- [socat](http://www.dest-unreach.org/socat/) and [websocat](https://github.com/vi/websocat)
-
-```bash
-brew install socat websocat          # macOS
-sudo apt install socat && cargo install websocat   # Linux (websocat via cargo)
-```
-
 ## Installation
 
+**macOS (Homebrew) — recommended:**
+```bash
+brew install nsted/serial2ws/serial2ws
+```
+This installs `socat`, `websocat`, and `serial2ws` in one step.
+
+**Manual:**
 ```bash
 git clone https://github.com/nsted/serial2ws.git
 cd serial2ws
 chmod +x serial2ws
-sudo cp serial2ws /usr/local/bin/   # makes serial2ws available system-wide
+sudo cp serial2ws /usr/local/bin/
+```
+
+Dependencies for manual install:
+```bash
+brew install socat websocat                        # macOS
+sudo apt install socat && cargo install websocat   # Linux
 ```
 
 ## Usage
