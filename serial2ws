@@ -10,16 +10,24 @@
 #   serial2ws -s mydevice            /tmp/tty.mydevice → /dev/ttysN
 #   serial2ws -p 9000                WebSocket on port 9000
 #   serial2ws -s mydevice -p 9000
+#   serial2ws -w                     WSS (auto self-signed cert)
+#   serial2ws -w -c cert.pem -k key.pem
 #
 set -euo pipefail
 
 NAME="serial2ws"
 PORT=8765
+WSS=0
+CERT=""
+KEY=""
 
 usage() {
-    echo "Usage: serial2ws [-s NAME] [-p PORT]"
+    echo "Usage: serial2ws [-s NAME] [-p PORT] [-w] [-c CERT] [-k KEY]"
     echo "  -s NAME   serial port label  (default: serial2ws)"
     echo "  -p PORT   WebSocket port     (default: 8765)"
+    echo "  -w        use WSS (TLS); auto-generates self-signed cert if -c/-k omitted"
+    echo "  -c CERT   path to TLS certificate (PEM)"
+    echo "  -k KEY    path to TLS private key (PEM)"
     exit 1
 }
 
@@ -27,6 +35,9 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -s|--serial) NAME="$2"; shift 2 ;;
         -p|--port)   PORT="$2"; shift 2 ;;
+        -w|--wss)    WSS=1; shift ;;
+        -c|--cert)   CERT="$2"; shift 2 ;;
+        -k|--key)    KEY="$2"; shift 2 ;;
         -h|--help)   usage ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
@@ -37,9 +48,29 @@ done
 missing=()
 command -v socat    &>/dev/null || missing+=(socat)
 command -v websocat &>/dev/null || missing+=(websocat)
+if [[ $WSS -eq 1 ]]; then
+    command -v openssl &>/dev/null || missing+=(openssl)
+fi
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "Missing dependencies — install with:"
     echo "  brew install ${missing[*]}"
+    exit 1
+fi
+
+# ── validate WSS flags ────────────────────────────────────────────────────────
+
+if [[ $WSS -eq 0 && ( -n "$CERT" || -n "$KEY" ) ]]; then
+    echo "Error: -c/-k require -w (WSS mode)"
+    exit 1
+fi
+
+if [[ $WSS -eq 1 && ( -n "$CERT" && -z "$KEY" ) ]]; then
+    echo "Error: -c requires -k"
+    exit 1
+fi
+
+if [[ $WSS -eq 1 && ( -z "$CERT" && -n "$KEY" ) ]]; then
+    echo "Error: -k requires -c"
     exit 1
 fi
 
@@ -59,12 +90,24 @@ fi
 # Uses PORT+1 so it doesn't conflict; stays on loopback only.
 RELAY=$((PORT + 1))
 
+# ── generate self-signed cert if WSS and no cert provided ────────────────────
+
+TMPDIR_CERT=""
+if [[ $WSS -eq 1 && -z "$CERT" ]]; then
+    TMPDIR_CERT=$(mktemp -d)
+    CERT="$TMPDIR_CERT/cert.pem"
+    KEY="$TMPDIR_CERT/key.pem"
+    openssl req -x509 -newkey rsa:2048 -keyout "$KEY" -out "$CERT" \
+        -days 365 -nodes -subj '/CN=localhost' 2>/dev/null
+fi
+
 # ── cleanup ───────────────────────────────────────────────────────────────────
 
 SOCAT_PID=""
 cleanup() {
     [[ -n "$SOCAT_PID" ]] && kill "$SOCAT_PID" 2>/dev/null || true
     rm -f "$LINK"
+    [[ -n "$TMPDIR_CERT" ]] && rm -rf "$TMPDIR_CERT"
     printf '\nStopped.\n'
 }
 trap cleanup EXIT INT TERM
@@ -87,9 +130,20 @@ fi
 
 DEVICE=$(readlink "$LINK")
 
+if [[ $WSS -eq 1 ]]; then
+    SCHEME="wss"
+else
+    SCHEME="ws"
+fi
+
 printf '\n'
 printf '  serial port  %s  (→ %s)\n' "$LINK" "$DEVICE"
-printf '  websocket    ws://localhost:%d\n' "$PORT"
+printf '  websocket    %s://localhost:%d\n' "$SCHEME" "$PORT"
+if [[ $WSS -eq 1 && -n "$TMPDIR_CERT" ]]; then
+    printf '  cert         self-signed (auto-generated)\n'
+elif [[ $WSS -eq 1 ]]; then
+    printf '  cert         %s\n' "$CERT"
+fi
 printf '\n'
 printf '  screen %s 115200\n' "$LINK"
 printf '\n  ^C to stop\n\n'
@@ -97,4 +151,9 @@ printf '\n  ^C to stop\n\n'
 # ── start websocat: WebSocket ↔ TCP relay ─────────────────────────────────────
 # -E = stay alive across disconnects (loop mode)
 
-exec websocat --binary -E "ws-l:127.0.0.1:$PORT" "tcp:127.0.0.1:$RELAY"
+if [[ $WSS -eq 1 ]]; then
+    exec websocat --binary -E --tls-cert="$CERT" --tls-key="$KEY" \
+        "wss-l:127.0.0.1:$PORT" "tcp:127.0.0.1:$RELAY"
+else
+    exec websocat --binary -E "ws-l:127.0.0.1:$PORT" "tcp:127.0.0.1:$RELAY"
+fi

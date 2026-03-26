@@ -43,10 +43,13 @@ sudo apt install socat && cargo install websocat   # Linux
 ## Usage
 
 ```
-serial2ws [-s NAME] [-p PORT]
+serial2ws [-s NAME] [-p PORT] [-w] [-c CERT] [-k KEY]
 
   -s NAME   name for the virtual serial port  (default: serial2ws)
   -p PORT   WebSocket port to listen on       (default: 8765)
+  -w        use WSS (TLS); auto-generates a self-signed cert if -c/-k are omitted
+  -c CERT   path to TLS certificate (PEM)
+  -k KEY    path to TLS private key (PEM)
   -h        show help
 ```
 
@@ -59,9 +62,46 @@ serial2ws
 # Custom name and port
 serial2ws -s mydevice -p 9000
 
+# WSS with auto-generated self-signed cert
+serial2ws -w
+
+# WSS with your own cert
+serial2ws -w -c cert.pem -k key.pem
+
 # Multiple instances auto-increment: serial2ws, serial2ws0, serial2ws1, …
 serial2ws &
 serial2ws &
+```
+
+## WS vs WSS
+
+By default `serial2ws` listens on plain `ws://`. This is fine for **localhost-only** connections — browsers allow unencrypted WebSocket connections to `127.0.0.1` from any origin.
+
+Use `-w` (WSS) when:
+- your WebSocket client is running on a **different machine**, or
+- your web app is served over **HTTPS** (browsers block mixed-content `ws://` from an `https://` page)
+
+### Certificates
+
+WSS requires a TLS certificate. Two options:
+
+**Auto-generated (self-signed)** — simplest, no setup:
+```bash
+serial2ws -w
+```
+Self-signed certs will cause a browser security warning and be rejected by default. To use them in a browser you must add the cert to your system trust store, or use a tool like [mkcert](https://github.com/FiloSottile/mkcert) to generate a locally-trusted cert instead.
+
+**Your own cert** — bring a cert already trusted by your clients:
+```bash
+serial2ws -w -c cert.pem -k key.pem
+```
+
+To generate a locally-trusted cert with `mkcert`:
+```bash
+brew install mkcert
+mkcert -install          # one-time: adds mkcert CA to system trust store
+mkcert localhost         # creates localhost.pem + localhost-key.pem
+serial2ws -w -c localhost.pem -k localhost-key.pem
 ```
 
 ## Connecting
