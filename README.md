@@ -34,12 +34,7 @@ sudo apt install socat && cargo install websocat   # Linux (websocat via cargo)
 git clone https://github.com/nsted/serial2ws.git
 cd serial2ws
 chmod +x serial2ws
-```
-
-Optionally install system-wide:
-
-```bash
-sudo cp serial2ws /usr/local/bin/
+sudo cp serial2ws /usr/local/bin/   # makes serial2ws available system-wide
 ```
 
 ## Usage
