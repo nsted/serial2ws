@@ -88,9 +88,10 @@ fi
 DEVICE=$(readlink "$LINK")
 
 printf '\n'
-printf '  serial port  %s\n' "$DEVICE"
-printf '  symlink      %s\n' "$LINK"
+printf '  serial port  %s  (→ %s)\n' "$LINK" "$DEVICE"
 printf '  websocket    ws://localhost:%d\n' "$PORT"
+printf '\n'
+printf '  screen %s 115200\n' "$LINK"
 printf '\n  ^C to stop\n\n'
 
 # ── start websocat: WebSocket ↔ TCP relay ─────────────────────────────────────
